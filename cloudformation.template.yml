@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'A "data lake as a service" project by Paul Rowe'
+Transform: 'AWS::Serverless-2016-10-31'
+Resources:
+  EntitiesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: uri
+          AttributeType: S
+      # - AttributeName: type
+      #   AttributeType: S
+      KeySchema:
+        - AttributeName: uri
+          KeyType: HASH
+  GraphQLApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: coral
+      AuthenticationType: API_KEY
+  ApiKey:
+    Type: AWS::AppSync::ApiKey
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+  Schema:
+    Type: AWS::AppSync::GraphQLSchema
+    Properties:
+      ApiId:  !GetAtt GraphQLApi.ApiId
+      Definition: |
+        schema {
+          query: Query
+          mutation: Mutation
+        }
+
+        type Query {
+          messageOfTheDay: String
+        }
+
+        type Mutation {
+          putEntity(uri: AWSURL!, data: AWSJSON!): String
+        }
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - appsync.amazonaws.com
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaRole
+  PutEntityLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src
+      Handler: putEntity.handler
+      Runtime: nodejs10.x
+      Policies:
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+  PutEntityDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: PutEntityDataSource
+      ServiceRoleArn: !GetAtt AppRole.Arn
+      Type: AWS_LAMBDA
+      LambdaConfig:
+        LambdaFunctionArn: !GetAtt PutEntityLambda.Arn
+  PutEntityResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      DataSourceName: !GetAtt PutEntityDataSource.Name
+      TypeName: Mutation
+      FieldName: putEntity
+      RequestMappingTemplate: |
+        {
+          "version": "2017-02-28",
+          "operation": "Invoke",
+          "payload": {
+            "typeName": "Mutation",
+            "field": "getPost",
+            "arguments":  $utils.toJson($context.arguments)
+          }
+        }
+      ResponseMappingTemplate: |
+        $utils.toJson($context.result)
+Outputs:
+  GraphQLUrl:
+    Value: !GetAtt GraphQLApi.GraphQLUrl
